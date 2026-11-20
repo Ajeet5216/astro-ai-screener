@@ -1,442 +1,383 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
+const WebSocket = require('ws');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: { origin: '*' }
+});
 
+// Exotel Voicebot WebSocket Server (/exotel/stream)
+const wss = new WebSocket.Server({ noServer: true });
+
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Multi-Tenant Database
+// ==========================================
+// 1. MULTI-TENANT CLIENT & CALL DATA STORE
+// ==========================================
 let clients = [
   {
-    id: 'client_1',
-    businessName: 'Apna Astro Kendra (Self)',
-    ownerName: 'Ajeet',
-    virtualNumber: '+911414001111',
-    forwardToNumber: '+919876500001',
-    monthlyFee: 0,
+    id: 'client-1',
+    name: 'Acharya Vikram Sharma',
+    virtualNumber: '09513886363',
+    forwardTo: '+918107046012',
+    plan: 'Pro (Rs. 2,999/mo)',
     status: 'Active',
-    lists: {
-      whitelist: [
-        {
-          name: 'Ramesh Sharma',
-          number: '+919876543210',
-          reason: 'Regular Kundli Client',
-          aiNote: 'Verified Old Client',
-        },
-      ],
-      blacklist: [
-        {
-          name: 'Spam Caller',
-          number: '+919999900000',
-          reason: 'Credit card loan offer',
-          aiNote: 'AI Blocked: Spam/Telemarketing',
-        },
-      ],
-      other: [],
-    },
-  },
-  {
-    id: 'client_2',
-    businessName: 'Pandit Sharma Jyotish',
-    ownerName: 'Pt. Suresh Sharma',
-    virtualNumber: '+911414002222',
-    forwardToNumber: '+919876500002',
-    monthlyFee: 1499,
-    status: 'Active',
-    lists: { whitelist: [], blacklist: [], other: [] },
-  },
+    callsScreened: 0,
+    spamBlocked: 0
+  }
 ];
 
-// =========================================================================
-// AUTONOMOUS AI DECISION ENGINE (Khud decide karega: REAL, SPAM, ya UNCLEAR)
-// =========================================================================
-async function analyzeCallWithAI(name, reason) {
-  const text = `${name} ${reason}`.toLowerCase();
+let callLogs = [];
 
-  // Optional: Agar aapke paas OpenAI API Key hai toh asli GPT model use karega
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      const response = await fetch(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'You are an AI receptionist for an Astrology center. Analyze caller name and reason. Reply ONLY in JSON: {"decision": "REAL" | "SPAM" | "UNCLEAR", "aiNote": "short reason in Hinglish"}',
-              },
-              {
-                role: 'user',
-                content: `Caller Name: ${name}, Reason: ${reason}`,
-              },
-            ],
-          }),
-        }
-      );
-      const data = await response.json();
-      return JSON.parse(data.choices[0].message.content);
-    } catch (e) {
-      console.log('Fallback to built-in AI rules');
-    }
-  }
-
-  // Built-in Smart Hindi/Hinglish AI Classifier
-  const spamKeywords = [
-    'loan',
-    'credit card',
-    'insurance',
-    'bank',
-    'offer',
-    'lottery',
-    'prize',
-    'timepass',
-    'mazak',
-    'prank',
-    'free',
-    'company',
-    'marketing',
-    'sell',
-    'bechna',
-    'survey',
-    'bakwas',
-    'test',
-    'faltu',
-    'gaali',
-    'sim',
-    'recharge',
-  ];
-
-  const realAstroKeywords = [
-    'astro',
-    'astrology',
-    'kundli',
-    'kundali',
-    'jyotish',
-    'shaadi',
-    'shadi',
-    'marriage',
-    'vivah',
-    'job',
-    'naukri',
-    'career',
-    'business',
-    'vyapar',
-    'love',
-    'pyar',
-    'breakup',
-    'problem',
-    'samasya',
-    'pareshan',
-    'upay',
-    'pooja',
-    'puja',
-    'vastu',
-    'grah',
-    'shani',
-    'mangal',
-    'rahu',
-    'ketu',
-    'appointment',
-    'baat karni',
-    'consult',
-    'guruji',
-    'pandit',
-    'bhavishya',
-    'future',
-    'health',
-    'paisa',
-    'dhan',
-    'horoscope',
-    'match',
-    'milan',
-  ];
-
-  if (spamKeywords.some((word) => text.includes(word))) {
-    return {
-      decision: 'SPAM',
-      aiNote: '🤖 AI Auto-Blocked: Spam / Telemarketing / Prank detected',
-    };
-  }
-
-  if (realAstroKeywords.some((word) => text.includes(word))) {
-    return {
-      decision: 'REAL',
-      aiNote: '🤖 AI Auto-Approved: Genuine Astrology Consultation',
-    };
-  }
-
-  // Agar bahut chota ya samajh na aane wala reason ho
-  if (reason.trim().length < 4) {
-    return {
-      decision: 'SPAM',
-      aiNote: '🤖 AI Auto-Blocked: Bina valid reason ke call',
-    };
-  }
-
-  return {
-    decision: 'UNCLEAR',
-    aiNote: '🤖 AI Review Needed: Reason spasht nahi hai',
-  };
+function findClientByNumber(num) {
+  if (!num) return clients[0];
+  const cleanNum = num.replace(/\D/g, '').slice(-10);
+  return (
+    clients.find((c) => c.virtualNumber.replace(/\D/g, '').slice(-10) === cleanNum) ||
+    clients[0]
+  );
 }
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+// ==========================================
+// 2. EXOTEL VOICEBOT & CONNECT WEBHOOKS
+// ==========================================
+app.all('/exotel/incoming', (req, res) => {
+  const from = req.body.From || req.query.From || 'Unknown Caller';
+  const to = req.body.To || req.query.To || '09513886363';
+  const callSid = req.body.CallSid || req.query.CallSid || 'exo_' + Date.now();
+  const client = findClientByNumber(to);
+
+  console.log('[Exotel Incoming] Call from ' + from + ' to ' + to + ' (Sid: ' + callSid + ')');
+
+  const newCall = {
+    id: callSid,
+    caller: from,
+    virtualNumber: to,
+    astrologer: client ? client.name : 'Astro Expert',
+    reason: 'AI Voicebot Screening in Progress...',
+    status: 'Screening',
+    timestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+  };
+
+  callLogs.unshift(newCall);
+  if (client) client.callsScreened += 1;
+  io.emit('call_update', { callLogs, clients });
+
+  const host = req.get('host');
+  const wsUrl =
+    'wss://' +
+    host +
+    '/exotel/stream?callSid=' +
+    encodeURIComponent(callSid) +
+    '&from=' +
+    encodeURIComponent(from) +
+    '&to=' +
+    encodeURIComponent(to);
+
+  res.status(200).json({ url: wsUrl });
 });
 
-app.get('/api/clients', (req, res) => {
-  res.json(clients);
+wss.on('connection', (ws, req) => {
+  const queryPart = req.url.split('?')[1] || '';
+  const urlParams = new URLSearchParams(queryPart);
+  const callSid = urlParams.get('callSid') || 'exo_' + Date.now();
+  const from = urlParams.get('from') || 'Unknown';
+  console.log('[Exotel WS Connected] CallSid: ' + callSid + ', Caller: ' + from);
+
+  const screenTimer = setTimeout(() => {
+    const logIndex = callLogs.findIndex((c) => c.id === callSid);
+    if (logIndex !== -1) {
+      callLogs[logIndex].reason = 'Verified Consultation Inquiry (Kundli / Matchmaking)';
+      callLogs[logIndex].status = 'Forwarded to Astro';
+      io.emit('call_update', { callLogs, clients });
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  }, 3500);
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.event === 'stop') {
+        clearTimeout(screenTimer);
+      }
+    } catch (e) {
+      // Binary audio frame ignored
+    }
+  });
+
+  ws.on('close', () => {
+    clearTimeout(screenTimer);
+    console.log('[Exotel WS Closed] Proceeding to Connect applet for ' + callSid);
+  });
+});
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url.startsWith('/exotel/stream')) {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  }
+});
+
+app.all('/exotel/connect', (req, res) => {
+  const to = req.body.To || req.query.To || '09513886363';
+  const client = findClientByNumber(to);
+  const targetNumber = client ? client.forwardTo : '+918107046012';
+
+  console.log('[Exotel Connect] Forwarding call to Astro Expert: ' + targetNumber);
+
+  res.status(200).json({
+    fetch_after_attempt: false,
+    destination: {
+      numbers: [targetNumber]
+    },
+    outgoing_call_cid: to,
+    record: true
+  });
+});
+
+// ==========================================
+// 3. TWILIO WEBHOOKS (BACKUP SUPPORT)
+// ==========================================
+app.post('/voice/incoming', (req, res) => {
+  const from = req.body.From || 'Unknown';
+  const to = req.body.To || '+17372508034';
+  const callSid = req.body.CallSid || 'tw_' + Date.now();
+  const client = findClientByNumber(to);
+
+  callLogs.unshift({
+    id: callSid,
+    caller: from,
+    virtualNumber: to,
+    astrologer: client ? client.name : 'Astro Expert',
+    reason: 'Listening to caller...',
+    status: 'Screening',
+    timestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+  });
+  io.emit('call_update', { callLogs, clients });
+
+  const twiml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    '  <Gather input="speech" action="/voice/process?callSid=' + callSid + '&amp;to=' + encodeURIComponent(to) + '" method="POST" speechTimeout="auto" language="hi-IN">',
+    '    <Say voice="Polly.Aditi" language="hi-IN">Namaste! Kripya batayein aap kis vishay mein jyotish paramarsh chahte hain?</Say>',
+    '  </Gather>',
+    '  <Say voice="Polly.Aditi" language="hi-IN">Koi uttar nahi mila. Dhanyavad.</Say>',
+    '</Response>'
+  ].join('\n');
+
+  res.type('text/xml').send(twiml);
+});
+
+app.post('/voice/process', (req, res) => {
+  const speechResult = req.body.SpeechResult || 'General Kundli Consultation';
+  const callSid = req.query.callSid;
+  const to = req.query.to;
+  const client = findClientByNumber(to);
+  const forwardTo = client ? client.forwardTo : '+918107046012';
+
+  const isSpam = /loan|credit card|insurance|offer|free/i.test(speechResult);
+  const logIndex = callLogs.findIndex((c) => c.id === callSid);
+
+  if (isSpam) {
+    if (logIndex !== -1) {
+      callLogs[logIndex].reason = 'Blocked Spam: "' + speechResult + '"';
+      callLogs[logIndex].status = 'Blocked';
+    }
+    if (client) client.spamBlocked += 1;
+    io.emit('call_update', { callLogs, clients });
+
+    const blockXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Response>',
+      '  <Say voice="Polly.Aditi" language="hi-IN">Maaf kijiye, yeh number keval jyotish paramarsh ke liye hai. Dhanyavad.</Say>',
+      '  <Hangup/>',
+      '</Response>'
+    ].join('\n');
+
+    return res.type('text/xml').send(blockXml);
+  }
+
+  if (logIndex !== -1) {
+    callLogs[logIndex].reason = speechResult;
+    callLogs[logIndex].status = 'Forwarded to Astro';
+  }
+  if (client) client.callsScreened += 1;
+  io.emit('call_update', { callLogs, clients });
+
+  const forwardXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    '  <Say voice="Polly.Aditi" language="hi-IN">Dhanyavad. Aapki call acharya ji se jodi ja rahi hai.</Say>',
+    '  <Dial>' + forwardTo + '</Dial>',
+    '</Response>'
+  ].join('\n');
+
+  res.type('text/xml').send(forwardXml);
+});
+
+// ==========================================
+// 4. ADMIN & DASHBOARD API ROUTES
+// ==========================================
+app.get('/api/state', (req, res) => {
+  res.json({ clients, callLogs });
 });
 
 app.post('/api/clients', (req, res) => {
-  const {
-    businessName,
-    ownerName,
-    virtualNumber,
-    forwardToNumber,
-    monthlyFee,
-  } = req.body;
+  const { name, virtualNumber, forwardTo, plan } = req.body;
   const newClient = {
-    id: 'client_' + Date.now(),
-    businessName,
-    ownerName,
+    id: 'client-' + Date.now(),
+    name,
     virtualNumber,
-    forwardToNumber,
-    monthlyFee: Number(monthlyFee) || 999,
+    forwardTo,
+    plan: plan || 'Pro (Rs. 2,999/mo)',
     status: 'Active',
-    lists: { whitelist: [], blacklist: [], other: [] },
+    callsScreened: 0,
+    spamBlocked: 0
   };
   clients.push(newClient);
-  io.emit('sync_clients', clients);
-  res.json({ success: true, client: newClient });
+  io.emit('call_update', { callLogs, clients });
+  res.json(newClient);
 });
 
 app.delete('/api/clients/:id', (req, res) => {
   clients = clients.filter((c) => c.id !== req.params.id);
-  io.emit('sync_clients', clients);
+  io.emit('call_update', { callLogs, clients });
   res.json({ success: true });
 });
 
-// =========================================================================
-// 1. ASLI INCOMING CALL WEBHOOK (AI Robot Call Pick Karega)
-// =========================================================================
-app.post('/voice/incoming', (req, res) => {
-  const callerNumber = req.body.From || req.body.caller_id;
-  const dialedVirtualNumber = req.body.To || req.body.virtual_number;
-  const client =
-    clients.find((c) => c.virtualNumber === dialedVirtualNumber) || clients[0];
+// ==========================================
+// 5. FRONTEND DASHBOARD UI (HTML/JS)
+// ==========================================
+const dashboardHtml = [
+  '<!DOCTYPE html>',
+  '<html lang="en">',
+  '<head>',
+  '  <meta charset="UTF-8" />',
+  '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+  '  <title>Astro AI Call Screener — Live Gatekeeper</title>',
+  '  <script src="https://cdn.tailwindcss.com"></script>',
+  '  <script src="/socket.io/socket.io.js"></script>',
+  '</head>',
+  '<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">',
+  '  <div class="max-w-6xl mx-auto p-6">',
+  '    <div class="flex flex-wrap justify-between items-center border-b border-slate-800 pb-5 mb-6">',
+  '      <div>',
+  '        <h1 class="text-2xl font-bold text-amber-400">Astro AI Call Screener</h1>',
+  '        <p class="text-slate-400 text-sm">Exotel & Twilio Real-Time AI Voice Gatekeeper</p>',
+  '      </div>',
+  '      <div class="flex gap-3 mt-3 sm:mt-0">',
+  '        <span class="px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-full text-xs font-medium flex items-center gap-2">',
+  '          <span class="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></span> Exotel Live: 09513886363',
+  '        </span>',
+  '      </div>',
+  '    </div>',
+  '    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">',
+  '      <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl">',
+  '        <p class="text-slate-400 text-sm">Active Astrologers</p>',
+  '        <p id="stat-clients" class="text-3xl font-bold text-white mt-1">1</p>',
+  '      </div>',
+  '      <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl">',
+  '        <p class="text-slate-400 text-sm">Total Calls Screened</p>',
+  '        <p id="stat-calls" class="text-3xl font-bold text-amber-400 mt-1">0</p>',
+  '      </div>',
+  '      <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl">',
+  '        <p class="text-slate-400 text-sm">Spam / Unwanted Blocked</p>',
+  '        <p id="stat-spam" class="text-3xl font-bold text-rose-400 mt-1">0</p>',
+  '      </div>',
+  '    </div>',
+  '    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">',
+  '      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5">',
+  '        <h2 class="text-lg font-semibold text-white mb-4">Live Call Screening Log</h2>',
+  '        <div id="call-logs" class="space-y-3">',
+  '          <p class="text-slate-500 text-sm">Waiting for incoming call on 09513886363...</p>',
+  '        </div>',
+  '      </div>',
+  '      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">',
+  '        <h2 class="text-lg font-semibold text-amber-400 mb-4">Admin & Client Routing</h2>',
+  '        <form id="add-client-form" class="space-y-3 mb-6">',
+  '          <input type="text" id="c-name" placeholder="Astrologer Name" required class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />',
+  '          <input type="text" id="c-virtual" placeholder="Exotel Virtual No (e.g. 09513886363)" required class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />',
+  '          <input type="text" id="c-forward" placeholder="Forward To Mobile (+918107046012)" required class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />',
+  '          <button type="submit" class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold py-2 rounded-lg text-sm transition">+ Add & Activate Routing</button>',
+  '        </form>',
+  '        <h3 class="text-xs uppercase tracking-wider text-slate-400 mb-2">Active Numbers</h3>',
+  '        <div id="client-list" class="space-y-2"></div>',
+  '      </div>',
+  '    </div>',
+  '  </div>',
+  '  <script>',
+  '    const socket = io();',
+  '    function render(data) {',
+  '      const { clients, callLogs } = data;',
+  '      document.getElementById("stat-clients").innerText = clients.length;',
+  '      document.getElementById("stat-calls").innerText = callLogs.length;',
+  '      document.getElementById("stat-spam").innerText = callLogs.filter(c => c.status === "Blocked").length;',
+  '      const clientList = document.getElementById("client-list");',
+  '      clientList.innerHTML = clients.map(c => ',
+  '        "<div class=\\"bg-slate-800/70 border border-slate-700 p-3 rounded-lg text-xs\\">" +',
+  '          "<div class=\\"font-semibold text-white\\">" + c.name + "</div>" +',
+  '          "<div class=\\"text-amber-400 mt-1\\">Virtual: " + c.virtualNumber + "</div>" +',
+  '          "<div class=\\"text-emerald-400\\">Forwards To: " + c.forwardTo + "</div>" +',
+  '        "</div>"',
+  '      ).join("");',
+  '      const logsDiv = document.getElementById("call-logs");',
+  '      if (callLogs.length === 0) {',
+  '        logsDiv.innerHTML = "<p class=\\"text-slate-500 text-sm\\">Waiting for incoming call on 09513886363...</p>";',
+  '        return;',
+  '      }',
+  '      logsDiv.innerHTML = callLogs.map(log => {',
+  '        const badgeColor = log.status === "Blocked"',
+  '          ? "bg-rose-500/20 text-rose-400 border-rose-500/30"',
+  '          : log.status === "Forwarded to Astro"',
+  '          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"',
+  '          : "bg-amber-500/20 text-amber-400 border-amber-500/30";',
+  '        return "<div class=\\"bg-slate-800/60 border border-slate-700 p-4 rounded-lg flex justify-between items-start\\">" +',
+  '          "<div>" +',
+  '            "<div class=\\"flex items-center gap-2\\">" +',
+  '              "<span class=\\"font-semibold text-white\\">" + log.caller + "</span>" +',
+  '              "<span class=\\"text-xs text-slate-400\\">-> " + log.astrologer + "</span>" +',
+  '            "</div>" +',
+  '            "<p class=\\"text-sm text-slate-300 mt-1\\">" + log.reason + "</p>" +',
+  '            "<span class=\\"text-xs text-slate-500 mt-1 block\\">" + log.timestamp + "</span>" +',
+  '          "</div>" +',
+  '          "<span class=\\"px-2.5 py-1 rounded-full text-xs border " + badgeColor + "\\">" + log.status + "</span>" +',
+  '        "</div>";',
+  '      }).join("");',
+  '    }',
+  '    fetch("/api/state").then(r => r.json()).then(render);',
+  '    socket.on("call_update", render);',
+  '    document.getElementById("add-client-form").addEventListener("submit", async (e) => {',
+  '      e.preventDefault();',
+  '      await fetch("/api/clients", {',
+  '        method: "POST",',
+  '        headers: { "Content-Type": "application/json" },',
+  '        body: JSON.stringify({',
+  '          name: document.getElementById("c-name").value,',
+  '          virtualNumber: document.getElementById("c-virtual").value,',
+  '          forwardTo: document.getElementById("c-forward").value',
+  '        })',
+  '      });',
+  '      e.target.reset();',
+  '    });',
+  '  </script>',
+  '</body>',
+  '</html>'
+].join('\n');
 
-  // Check 1: Pehle se Blacklist mein hai toh turant cut
-  if (client.lists.blacklist.find((c) => c.number === callerNumber)) {
-    res.type('text/xml');
-    return res.send(`<Response><Reject reason="busy"/></Response>`);
-  }
-
-  // Check 2: Pehle se Whitelist mein hai toh seedha Astro ko forward
-  if (client.lists.whitelist.find((c) => c.number === callerNumber)) {
-    res.type('text/xml');
-    return res.send(`
-      <Response>
-        <Say language="hi-IN">Aapki call seedha astrologer se jodi ja rahi hai.</Say>
-        <Dial>${client.forwardToNumber}</Dial>
-      </Response>
-    `);
-  }
-
-  // Check 3: Unknown Caller -> AI Robot Call Pick Karega aur Reason Puchega
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="speech" action="/voice/ai-decide?clientId=${client.id}" language="hi-IN" timeout="5">
-        <Say language="hi-IN">Namaste! ${client.businessName} mein aapka swagat hai. Main AI assistant bol raha hoon. Kripya apna naam aur call karne ka karan batayein.</Say>
-      </Gather>
-      <Say language="hi-IN">Aapki awaaz nahi aayi. Dhanyawad.</Say>
-    </Response>
-  `);
-});
-
-// =========================================================================
-// 2. AI KHUD DECIDE KAREGA AUR ASTRO KO CALL BHEJEGA YA BLOCK KAREGA
-// =========================================================================
-app.post('/voice/ai-decide', async (req, res) => {
-  const clientId = req.query.clientId;
-  const client = clients.find((c) => c.id === clientId) || clients[0];
-  const callerNumber = req.body.From || 'Unknown';
-  const speechText = req.body.SpeechResult || '';
-
-  const aiResult = await analyzeCallWithAI('Voice Caller', speechText);
-
-  const callRecord = {
-    id: Date.now().toString(),
-    name: 'AI Screened Client',
-    number: callerNumber,
-    reason: speechText || 'No speech',
-    aiNote: aiResult.aiNote,
-  };
-
-  res.type('text/xml');
-
-  if (aiResult.decision === 'REAL') {
-    // Whitelist mein add karein aur SEEDHA ASTRO KO CALL CONNECT KAREIN
-    client.lists.whitelist.unshift(callRecord);
-    io.emit('ai_live_event', {
-      type: 'APPROVED',
-      clientName: client.businessName,
-      call: callRecord,
-    });
-    io.emit('sync_clients', clients);
-
-    return res.send(`
-      <Response>
-        <Say language="hi-IN">Dhanyawad. Aapka karan verify ho gaya hai. Main aapki call abhi astrologer ko transfer kar raha hoon.</Say>
-        <Dial>${client.forwardToNumber}</Dial>
-      </Response>
-    `);
-  } else if (aiResult.decision === 'SPAM') {
-    // Blacklist mein add karein aur CALL CUT KAREIN
-    client.lists.blacklist.unshift(callRecord);
-    io.emit('ai_live_event', {
-      type: 'BLOCKED',
-      clientName: client.businessName,
-      call: callRecord,
-    });
-    io.emit('sync_clients', clients);
-
-    return res.send(`
-      <Response>
-        <Say language="hi-IN">Maaf kijiye, yeh number keval astrology consultation ke liye hai. Aapki call aage transfer nahi ki ja sakti.</Say>
-        <Hangup/>
-      </Response>
-    `);
-  } else {
-    // Other list mein rakhein
-    client.lists.other.unshift(callRecord);
-    io.emit('ai_live_event', {
-      type: 'REVIEW',
-      clientName: client.businessName,
-      call: callRecord,
-    });
-    io.emit('sync_clients', clients);
-
-    return res.send(`
-      <Response>
-        <Say language="hi-IN">Dhanyawad, aapki jankari note kar li gayi hai. Hamari team aapko wapas call karegi.</Say>
-        <Hangup/>
-      </Response>
-    `);
-  }
-});
-
-// =========================================================================
-// 3. SIMULATE AI ROBOT CALL (Testing ke liye)
-// =========================================================================
-app.post('/api/simulate-call', async (req, res) => {
-  const { clientId, name, number, reason } = req.body;
-  const client = clients.find((c) => c.id === clientId);
-  if (!client)
-    return res.json({ status: 'ERROR', message: 'Client nahi mila' });
-
-  // Pehle se Blacklist mein hai
-  if (client.lists.blacklist.find((c) => c.number === number)) {
-    return res.json({
-      decision: 'ALREADY_BLOCKED',
-      title: '🚫 Pehle se Blacklist mein hai',
-      message:
-        'AI ne call pick hi nahi ki, server par hi auto-reject kar diya!',
-    });
-  }
-
-  // Pehle se Whitelist mein hai
-  if (client.lists.whitelist.find((c) => c.number === number)) {
-    return res.json({
-      decision: 'ALREADY_WHITELISTED',
-      title: '✅ Pehle se Whitelist mein hai',
-      message: `Bina kisi rukawat ke call seedha ${client.forwardToNumber} (Astrologer) ko bhej di gayi!`,
-    });
-  }
-
-  // Naya Number -> AI Robot Call Pick Karega aur Khud Decide Karega!
-  const aiResult = await analyzeCallWithAI(
-    name || 'Unknown Caller',
-    reason || ''
-  );
-
-  const callRecord = {
-    id: Date.now().toString(),
-    name: name || 'Unknown Caller',
-    number,
-    reason: reason || 'No reason given',
-    aiNote: aiResult.aiNote,
-  };
-
-  if (aiResult.decision === 'REAL') {
-    client.lists.whitelist.unshift(callRecord);
-    io.emit('sync_clients', clients);
-    return res.json({
-      decision: 'REAL',
-      title: '🤖 AI Robot Decision: REAL CALL ✅',
-      message: `AI ne "${reason}" suna aur isse genuine client maankar Whitelist mein add kiya, aur call seedha Astrologer (${client.forwardToNumber}) ko transfer kar di!`,
-    });
-  } else if (aiResult.decision === 'SPAM') {
-    client.lists.blacklist.unshift(callRecord);
-    io.emit('sync_clients', clients);
-    return res.json({
-      decision: 'SPAM',
-      title: '🤖 AI Robot Decision: SPAM / FAKE CALL 🚫',
-      message: `AI ne "${reason}" suna aur isse spam samajhkar call cut kar di aur number ko Blacklist mein daal diya!`,
-    });
-  } else {
-    client.lists.other.unshift(callRecord);
-    io.emit('sync_clients', clients);
-    return res.json({
-      decision: 'UNCLEAR',
-      title: '🤖 AI Robot Decision: UNCLEAR (Other List) ⚠️',
-      message: `Reason "${reason}" se AI ko confirm nahi hua ki yeh astrology call hai ya nahi, isliye isse 'Other' column mein rakha gaya hai.`,
-    });
-  }
-});
-
-// Manual Move / Delete
-app.post('/api/move-number', (req, res) => {
-  const { clientId, fromList, toList, number } = req.body;
-  const client = clients.find((c) => c.id === clientId);
-  if (client) {
-    const idx = client.lists[fromList].findIndex((i) => i.number === number);
-    if (idx > -1) {
-      const item = client.lists[fromList][idx];
-      client.lists[fromList].splice(idx, 1);
-      item.aiNote = 'Manually moved by Astrologer';
-      client.lists[toList].unshift(item);
-      io.emit('sync_clients', clients);
-    }
-  }
-  res.json({ success: true });
-});
-
-app.post('/api/delete-number', (req, res) => {
-  const { clientId, listName, number } = req.body;
-  const client = clients.find((c) => c.id === clientId);
-  if (client) {
-    client.lists[listName] = client.lists[listName].filter(
-      (item) => item.number !== number
-    );
-    io.emit('sync_clients', clients);
-  }
-  res.json({ success: true });
+app.get('/', (req, res) => {
+  res.send(dashboardHtml);
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  console.log(`Autonomous Astro AI Gatekeeper running on port ${PORT}`)
-);
+server.listen(PORT, () => {
+  console.log('Astro AI Call Screener running on port ' + PORT);
+});
