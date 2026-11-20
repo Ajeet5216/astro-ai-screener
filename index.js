@@ -37,9 +37,9 @@ let callLogs = [];
 
 function findClientByNumber(num) {
   if (!num) return clients[0];
-  const cleanNum = num.replace(/\D/g, '').slice(-10);
+  const cleanNum = String(num).replace(/\D/g, '').slice(-10);
   return (
-    clients.find((c) => c.virtualNumber.replace(/\D/g, '').slice(-10) === cleanNum) ||
+    clients.find((c) => String(c.virtualNumber).replace(/\D/g, '').slice(-10) === cleanNum) ||
     clients[0]
   );
 }
@@ -48,9 +48,11 @@ function findClientByNumber(num) {
 // 2. EXOTEL VOICEBOT & CONNECT WEBHOOKS
 // ==========================================
 app.all('/exotel/incoming', (req, res) => {
-  const from = req.body.From || req.query.From || 'Unknown Caller';
-  const to = req.body.To || req.query.To || '09513886363';
-  const callSid = req.body.CallSid || req.query.CallSid || 'exo_' + Date.now();
+  const body = req.body || {};
+  const query = req.query || {};
+  const from = body.From || query.From || 'Unknown Caller';
+  const to = body.To || query.To || '09513886363';
+  const callSid = body.CallSid || query.CallSid || 'exo_' + Date.now();
   const client = findClientByNumber(to);
 
   console.log('[Exotel Incoming] Call from ' + from + ' to ' + to + ' (Sid: ' + callSid + ')');
@@ -84,7 +86,7 @@ app.all('/exotel/incoming', (req, res) => {
 });
 
 wss.on('connection', (ws, req) => {
-  const queryPart = req.url.split('?')[1] || '';
+  const queryPart = (req.url || '').split('?')[1] || '';
   const urlParams = new URLSearchParams(queryPart);
   const callSid = urlParams.get('callSid') || 'exo_' + Date.now();
   const from = urlParams.get('from') || 'Unknown';
@@ -120,7 +122,7 @@ wss.on('connection', (ws, req) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
-  if (request.url.startsWith('/exotel/stream')) {
+  if (request.url && request.url.startsWith('/exotel/stream')) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
@@ -128,7 +130,9 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 app.all('/exotel/connect', (req, res) => {
-  const to = req.body.To || req.query.To || '09513886363';
+  const body = req.body || {};
+  const query = req.query || {};
+  const to = body.To || query.To || '09513886363';
   const client = findClientByNumber(to);
   const targetNumber = client ? client.forwardTo : '+918107046012';
 
@@ -148,9 +152,10 @@ app.all('/exotel/connect', (req, res) => {
 // 3. TWILIO WEBHOOKS (BACKUP SUPPORT)
 // ==========================================
 app.post('/voice/incoming', (req, res) => {
-  const from = req.body.From || 'Unknown';
-  const to = req.body.To || '+17372508034';
-  const callSid = req.body.CallSid || 'tw_' + Date.now();
+  const body = req.body || {};
+  const from = body.From || 'Unknown';
+  const to = body.To || '+17372508034';
+  const callSid = body.CallSid || 'tw_' + Date.now();
   const client = findClientByNumber(to);
 
   callLogs.unshift({
@@ -178,9 +183,11 @@ app.post('/voice/incoming', (req, res) => {
 });
 
 app.post('/voice/process', (req, res) => {
-  const speechResult = req.body.SpeechResult || 'General Kundli Consultation';
-  const callSid = req.query.callSid;
-  const to = req.query.to;
+  const body = req.body || {};
+  const query = req.query || {};
+  const speechResult = body.SpeechResult || 'General Kundli Consultation';
+  const callSid = query.callSid;
+  const to = query.to;
   const client = findClientByNumber(to);
   const forwardTo = client ? client.forwardTo : '+918107046012';
 
@@ -232,7 +239,7 @@ app.get('/api/state', (req, res) => {
 });
 
 app.post('/api/clients', (req, res) => {
-  const { name, virtualNumber, forwardTo, plan } = req.body;
+  const { name, virtualNumber, forwardTo, plan } = req.body || {};
   const newClient = {
     id: 'client-' + Date.now(),
     name,
