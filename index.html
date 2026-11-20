@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="hi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Autonomous Astro AI Gatekeeper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body class="bg-slate-950 text-white font-sans min-h-screen p-4 md:p-6">
+    <!-- TOP NAVIGATION -->
+    <div
+      class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-6"
+    >
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-xl md:text-2xl font-bold text-amber-400">
+            🤖 Autonomous Astro AI Gatekeeper
+          </h1>
+          <span
+            class="bg-emerald-500/20 text-emerald-400 text-xs px-2.5 py-0.5 rounded-full border border-emerald-500/30 font-semibold"
+            >Auto-Pilot ON</span
+          >
+        </div>
+        <p class="text-xs text-slate-400 mt-0.5">
+          AI Robot khud customer se reason sunega, Spam block karega, aur Real
+          call Astro ko bhejega
+        </p>
+      </div>
+
+      <div class="flex bg-slate-800 p-1 rounded-xl border border-slate-700">
+        <button
+          id="tab-screener"
+          onclick="switchTab('screener')"
+          class="px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 text-white transition"
+        >
+          📱 AI Call Logs & Lists
+        </button>
+        <button
+          id="tab-admin"
+          onclick="switchTab('admin')"
+          class="px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:text-white transition"
+        >
+          👑 Admin & Income Panel
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW 1: AUTONOMOUS AI SCREENER DASHBOARD -->
+    <div id="view-screener" class="max-w-7xl mx-auto">
+      <!-- Account Bar & AI Call Tester -->
+      <div
+        class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 flex flex-col md:flex-row justify-between items-center gap-4"
+      >
+        <div class="flex items-center gap-3 w-full md:w-auto">
+          <label class="text-sm text-slate-400 whitespace-nowrap"
+            >Astro Account:</label
+          >
+          <select
+            id="client-selector"
+            onchange="changeSelectedClient()"
+            class="bg-slate-800 border border-slate-700 text-amber-300 text-sm rounded-lg px-3 py-2 w-full md:w-72 font-semibold"
+          ></select>
+        </div>
+
+        <div
+          class="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end"
+        >
+          <div class="text-xs text-slate-400">
+            Virtual No:
+            <span
+              id="active-virtual-no"
+              class="text-emerald-400 font-mono font-bold"
+            ></span>
+          </div>
+          <button
+            onclick="openSimulator()"
+            class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg text-sm font-semibold shadow-lg transition"
+          >
+            🤖 Test AI Robot Call
+          </button>
+        </div>
+      </div>
+
+      <!-- Live AI Decision Banner (Jab AI koi call process karega toh yahan dikhega) -->
+      <div
+        id="ai-status-banner"
+        class="hidden mb-6 p-4 rounded-xl border flex items-start justify-between gap-4"
+      >
+        <div>
+          <h4 id="banner-title" class="font-bold text-base"></h4>
+          <p id="banner-msg" class="text-sm mt-1 opacity-90"></p>
+        </div>
+        <button
+          onclick="document.getElementById('ai-status-banner').classList.add('hidden')"
+          class="text-xs opacity-70 hover:opacity-100"
+        >
+          ✕
+        </button>
+      </div>
+
+      <!-- 3 COLUMNS -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- COLUMN 1: WHITELIST (AI Approved & Forwarded to Astro) -->
+        <div class="bg-slate-900 rounded-xl p-5 border border-emerald-500/30">
+          <div class="flex justify-between items-center mb-2">
+            <h2 class="font-bold text-emerald-400">
+              ✅ Whitelist (Sent to Astro)
+            </h2>
+            <span
+              id="whitelist-count"
+              class="bg-emerald-500/20 text-emerald-300 text-xs px-2.5 py-0.5 rounded-full"
+              >0</span
+            >
+          </div>
+          <p class="text-xs text-slate-400 mb-4">
+            AI ne inhe Real Client maankar seedha Astrologer ko call bhej di.
+          </p>
+          <div id="whitelist-container" class="space-y-3"></div>
+        </div>
+
+        <!-- COLUMN 2: OTHER (Unclear Calls for Review) -->
+        <div class="bg-slate-900 rounded-xl p-5 border border-amber-500/30">
+          <div class="flex justify-between items-center mb-2">
+            <h2 class="font-bold text-amber-400">⚠️ Other (Unclear Reason)</h2>
+            <span
+              id="other-count"
+              class="bg-amber-500/20 text-amber-300 text-xs px-2.5 py-0.5 rounded-full"
+              >0</span
+            >
+          </div>
+          <p class="text-xs text-slate-400 mb-4">
+            Jinka reason AI ko clear nahi hua—aap manually Approve/Block kar
+            sakte hain.
+          </p>
+          <div id="other-container" class="space-y-3"></div>
+        </div>
+
+        <!-- COLUMN 3: BLACKLIST (AI Auto-Blocked Spam) -->
+        <div class="bg-slate-900 rounded-xl p-5 border border-rose-500/30">
+          <div class="flex justify-between items-center mb-2">
+            <h2 class="font-bold text-rose-400">🚫 Blacklist (AI Blocked)</h2>
+            <span
+              id="blacklist-count"
+              class="bg-rose-500/20 text-rose-300 text-xs px-2.5 py-0.5 rounded-full"
+              >0</span
+            >
+          </div>
+          <p class="text-xs text-slate-400 mb-4">
+            AI ne inhe Spam/Prank samajhkar Astro tak pahunchne se pehle hi
+            block kar diya.
+          </p>
+          <div id="blacklist-container" class="space-y-3"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 2: SUPER ADMIN PANEL -->
+    <div id="view-admin" class="max-w-7xl mx-auto hidden">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div class="bg-slate-900 p-5 rounded-xl border border-emerald-500/30">
+          <p class="text-xs text-slate-400">Monthly Recurring Income (MRR)</p>
+          <h3
+            id="stat-revenue"
+            class="text-3xl font-bold text-emerald-400 mt-1"
+          >
+            ₹0
+          </h3>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-xl border border-indigo-500/30">
+          <p class="text-xs text-slate-400">Active Virtual Numbers</p>
+          <h3 id="stat-numbers" class="text-3xl font-bold text-indigo-400 mt-1">
+            0
+          </h3>
+        </div>
+        <div
+          class="bg-slate-900 p-5 rounded-xl border border-amber-500/30 flex items-center justify-between"
+        >
+          <div>
+            <p class="text-xs text-slate-400">Naya Client Jodein</p>
+            <p class="text-sm font-semibold text-white mt-1">
+              Virtual No. Assign Karein
+            </p>
+          </div>
+          <button
+            onclick="openAddClientModal()"
+            class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-sm"
+          >
+            + Add Client
+          </button>
+        </div>
+      </div>
+
+      <div
+        class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden"
+      >
+        <div class="p-4 border-b border-slate-800">
+          <h2 class="font-bold text-lg text-white">
+            📋 All Clients & Virtual Number Assignments
+          </h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-800/60 text-slate-400 text-xs uppercase">
+              <tr>
+                <th class="p-4">Business / Astrologer</th>
+                <th class="p-4">Assigned Virtual No.</th>
+                <th class="p-4">Forwards To (Astro No.)</th>
+                <th class="p-4">Monthly Plan</th>
+                <th class="p-4">Action</th>
+              </tr>
+            </thead>
+            <tbody
+              id="admin-clients-table"
+              class="divide-y divide-slate-800"
+            ></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: AI ROBOT CALL SIMULATOR -->
+    <div
+      id="simulator-modal"
+      class="fixed inset-0 bg-black/80 hidden items-center justify-center p-4 z-40"
+    >
+      <div
+        class="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl"
+      >
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-2xl">🤖</span>
+          <h3 class="text-lg font-bold text-indigo-400">
+            AI Robot Call Simulator
+          </h3>
+        </div>
+        <p class="text-xs text-slate-400 mb-4">
+          Customer bankar call karein aur dekhein AI khud kaise decide karta
+          hai!
+        </p>
+
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs text-slate-400">Customer ka Naam</label>
+            <input
+              id="sim-name"
+              type="text"
+              placeholder="e.g. Rahul Verma"
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm mt-1"
+            />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400">Customer Mobile No.</label>
+            <input
+              id="sim-number"
+              type="text"
+              placeholder="e.g. +919876512345"
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm mt-1"
+            />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400"
+              >Customer ne AI ko kya Reason bataya?</label
+            >
+            <input
+              id="sim-reason"
+              type="text"
+              placeholder="Try: 'Kundli dikhani hai' OR 'Credit card loan offer'"
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm mt-1"
+            />
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-3 mt-5">
+          <button
+            onclick="closeSimulator()"
+            class="px-4 py-2 text-slate-400 text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onclick="triggerSimulatedCall()"
+            class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-lg text-sm font-semibold"
+          >
+            📞 AI Ko Call Lagayein
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: ADD NEW CLIENT (Admin) -->
+    <div
+      id="add-client-modal"
+      class="fixed inset-0 bg-black/80 hidden items-center justify-center p-4 z-50"
+    >
+      <div
+        class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6"
+      >
+        <h3 class="text-lg font-bold text-amber-400 mb-4">
+          ➕ Naya Client & Virtual Number Add Karein
+        </h3>
+        <div class="space-y-3">
+          <input
+            id="new-biz"
+            type="text"
+            placeholder="Business / Astrologer Name"
+            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm"
+          />
+          <input
+            id="new-owner"
+            type="text"
+            placeholder="Owner Name"
+            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm"
+          />
+          <input
+            id="new-virtual"
+            type="text"
+            placeholder="Virtual Number (+91...)"
+            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm"
+          />
+          <input
+            id="new-forward"
+            type="text"
+            placeholder="Astro ka Asli Mobile No. (+91...)"
+            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm"
+          />
+          <input
+            id="new-fee"
+            type="number"
+            placeholder="Monthly Charge in ₹ (e.g. 1499)"
+            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm"
+          />
+        </div>
+        <div class="flex justify-end gap-3 mt-5">
+          <button
+            onclick="closeAddClientModal()"
+            class="px-4 py-2 text-slate-400 text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onclick="saveNewClient()"
+            class="bg-amber-500 text-slate-950 font-bold px-5 py-2 rounded-lg text-sm"
+          >
+            Save & Activate
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const socket = io();
+      let allClients = [];
+      let selectedClientId = 'client_1';
+
+      fetch('/api/clients')
+        .then((r) => r.json())
+        .then((data) => {
+          allClients = data;
+          renderAll();
+        });
+
+      socket.on('sync_clients', (data) => {
+        allClients = data;
+        renderAll();
+      });
+
+      socket.on('ai_live_event', (evt) => {
+        showBanner(
+          evt.type === 'APPROVED'
+            ? 'REAL'
+            : evt.type === 'BLOCKED'
+            ? 'SPAM'
+            : 'UNCLEAR',
+          `🤖 Live AI Action (${evt.clientName}): ${evt.call.number}`,
+          `Reason: "${evt.call.reason}" → ${evt.call.aiNote}`
+        );
+      });
+
+      function switchTab(tab) {
+        document
+          .getElementById('view-screener')
+          .classList.toggle('hidden', tab !== 'screener');
+        document
+          .getElementById('view-admin')
+          .classList.toggle('hidden', tab !== 'admin');
+        document.getElementById('tab-screener').className =
+          tab === 'screener'
+            ? 'px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 text-white'
+            : 'px-4 py-2 rounded-lg text-sm font-semibold text-slate-300';
+        document.getElementById('tab-admin').className =
+          tab === 'admin'
+            ? 'px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950'
+            : 'px-4 py-2 rounded-lg text-sm font-semibold text-slate-300';
+      }
+
+      function renderAll() {
+        const selector = document.getElementById('client-selector');
+        selector.innerHTML = allClients
+          .map(
+            (c) =>
+              `<option value="${c.id}" ${
+                c.id === selectedClientId ? 'selected' : ''
+              }>${c.businessName}</option>`
+          )
+          .join('');
+
+        const currentClient =
+          allClients.find((c) => c.id === selectedClientId) || allClients[0];
+        if (currentClient) {
+          selectedClientId = currentClient.id;
+          document.getElementById('active-virtual-no').innerText =
+            currentClient.virtualNumber;
+          document.getElementById('whitelist-count').innerText =
+            currentClient.lists.whitelist.length;
+          document.getElementById('other-count').innerText =
+            currentClient.lists.other.length;
+          document.getElementById('blacklist-count').innerText =
+            currentClient.lists.blacklist.length;
+
+          document.getElementById('whitelist-container').innerHTML =
+            currentClient.lists.whitelist
+              .map((i) => cardHTML(i, 'whitelist'))
+              .join('');
+          document.getElementById('other-container').innerHTML =
+            currentClient.lists.other.map((i) => cardHTML(i, 'other')).join('');
+          document.getElementById('blacklist-container').innerHTML =
+            currentClient.lists.blacklist
+              .map((i) => cardHTML(i, 'blacklist'))
+              .join('');
+        }
+
+        const totalRevenue = allClients.reduce(
+          (sum, c) => sum + (c.monthlyFee || 0),
+          0
+        );
+        document.getElementById('stat-revenue').innerText =
+          '₹' + totalRevenue.toLocaleString('en-IN');
+        document.getElementById('stat-numbers').innerText = allClients.length;
+
+        document.getElementById('admin-clients-table').innerHTML = allClients
+          .map(
+            (c) => `
+        <tr class="hover:bg-slate-800/40">
+          <td class="p-4"><div class="font-bold text-white">${c.businessName}</div><div class="text-xs text-slate-400">${c.ownerName}</div></td>
+          <td class="p-4 font-mono text-emerald-400 font-semibold">${c.virtualNumber}</td>
+          <td class="p-4 font-mono text-slate-300">${c.forwardToNumber}</td>
+          <td class="p-4 font-bold text-amber-400">₹${c.monthlyFee}/mo</td>
+          <td class="p-4"><button onclick="deleteClient('${c.id}')" class="text-rose-400 hover:underline text-xs">Remove</button></td>
+        </tr>
+      `
+          )
+          .join('');
+      }
+
+      function changeSelectedClient() {
+        selectedClientId = document.getElementById('client-selector').value;
+        renderAll();
+      }
+
+      function cardHTML(item, listName) {
+        let actionButtons = '';
+        if (listName === 'other') {
+          actionButtons = `
+          <div class="flex gap-2 mt-2">
+            <button onclick="moveNumber('other', 'whitelist', '${item.number}')" class="bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs px-2 py-1 rounded">✅ Approve</button>
+            <button onclick="moveNumber('other', 'blacklist', '${item.number}')" class="bg-rose-600/30 hover:bg-rose-600 text-rose-300 hover:text-white text-xs px-2 py-1 rounded">🚫 Block</button>
+          </div>
+        `;
+        }
+        return `
+        <div class="bg-slate-950 p-3.5 rounded-lg border border-slate-800 flex justify-between items-start">
+          <div>
+            <p class="font-semibold text-sm text-white">${item.name}</p>
+            <p class="text-xs text-indigo-400 font-mono">${item.number}</p>
+            <p class="text-xs text-slate-300 mt-1">Reason: "${item.reason}"</p>
+            <p class="text-[11px] text-amber-400/90 mt-1 font-medium">${
+              item.aiNote || ''
+            }</p>
+            ${actionButtons}
+          </div>
+          <button onclick="deleteNumber('${listName}', '${
+          item.number
+        }')" class="text-xs text-slate-500 hover:text-rose-400">✕</button>
+        </div>
+      `;
+      }
+
+      function showBanner(type, title, msg) {
+        const banner = document.getElementById('ai-status-banner');
+        banner.classList.remove(
+          'hidden',
+          'bg-emerald-950/80',
+          'border-emerald-500',
+          'text-emerald-200',
+          'bg-rose-950/80',
+          'border-rose-500',
+          'text-rose-200',
+          'bg-amber-950/80',
+          'border-amber-500',
+          'text-amber-200'
+        );
+
+        if (type === 'REAL' || type === 'ALREADY_WHITELISTED') {
+          banner.classList.add(
+            'bg-emerald-950/80',
+            'border-emerald-500',
+            'text-emerald-200'
+          );
+        } else if (type === 'SPAM' || type === 'ALREADY_BLOCKED') {
+          banner.classList.add(
+            'bg-rose-950/80',
+            'border-rose-500',
+            'text-rose-200'
+          );
+        } else {
+          banner.classList.add(
+            'bg-amber-950/80',
+            'border-amber-500',
+            'text-amber-200'
+          );
+        }
+
+        document.getElementById('banner-title').innerText = title;
+        document.getElementById('banner-msg').innerText = msg;
+      }
+
+      function moveNumber(fromList, toList, number) {
+        fetch('/api/move-number', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientId: selectedClientId,
+            fromList,
+            toList,
+            number,
+          }),
+        });
+      }
+
+      function deleteNumber(listName, number) {
+        fetch('/api/delete-number', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientId: selectedClientId,
+            listName,
+            number,
+          }),
+        });
+      }
+
+      function openAddClientModal() {
+        document
+          .getElementById('add-client-modal')
+          .classList.replace('hidden', 'flex');
+      }
+      function closeAddClientModal() {
+        document
+          .getElementById('add-client-modal')
+          .classList.replace('flex', 'hidden');
+      }
+
+      function saveNewClient() {
+        const payload = {
+          businessName: document.getElementById('new-biz').value,
+          ownerName: document.getElementById('new-owner').value,
+          virtualNumber: document.getElementById('new-virtual').value,
+          forwardToNumber: document.getElementById('new-forward').value,
+          monthlyFee: document.getElementById('new-fee').value,
+        };
+        if (!payload.businessName || !payload.virtualNumber)
+          return alert('Business Name aur Virtual Number zaroori hai');
+        fetch('/api/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).then(() => closeAddClientModal());
+      }
+
+      function deleteClient(id) {
+        if (id === 'client_1')
+          return alert('Default Admin account delete nahi ho sakta');
+        fetch('/api/clients/' + id, { method: 'DELETE' });
+      }
+
+      function openSimulator() {
+        document
+          .getElementById('simulator-modal')
+          .classList.replace('hidden', 'flex');
+      }
+      function closeSimulator() {
+        document
+          .getElementById('simulator-modal')
+          .classList.replace('flex', 'hidden');
+      }
+
+      function triggerSimulatedCall() {
+        const payload = {
+          clientId: selectedClientId,
+          name: document.getElementById('sim-name').value,
+          number: document.getElementById('sim-number').value,
+          reason: document.getElementById('sim-reason').value,
+        };
+        if (!payload.number) return alert('Mobile number daalein');
+        fetch('/api/simulate-call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+          .then((r) => r.json())
+          .then((res) => {
+            closeSimulator();
+            showBanner(res.decision, res.title, res.message);
+          });
+      }
+    </script>
+  </body>
+</html>
